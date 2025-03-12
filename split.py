@@ -4,7 +4,15 @@ import shutil
 
 from pydub import AudioSegment
 from tqdm import tqdm
+from threading import Thread
+from queue import Queue
 
+def worker_thread(q: Queue[tuple[AudioSegment, tuple]]):
+    while not q.empty():
+        segment, args = q.get()
+        segment.export(args[0], format=args[1], parameters=args[2])
+        print(args[0])
+    
 
 def time_to_milliseconds(time_str):
     h, m, s = map(float, time_str.split(":"))
@@ -28,11 +36,12 @@ def split_wav_by_srt(srt_path, wav_path, output_folder, sample_rate, mono, use_s
         os.makedirs(output_folder)
 
     mapping = []
-
+    q: Queue[tuple[AudioSegment, tuple]] = Queue()
+    
     with open(srt_path, 'r', encoding='utf-8') as file:
         content = file.read()
         blocks = content.strip().split("\n\n")
-        audio = AudioSegment.from_wav(wav_path)
+        audio: AudioSegment = AudioSegment.from_wav(wav_path)
         prj_name = os.path.basename(wav_path)[:-4]
 
         for block in tqdm(blocks, desc=f"Processing {prj_name}"):
@@ -61,8 +70,14 @@ def split_wav_by_srt(srt_path, wav_path, output_folder, sample_rate, mono, use_s
 
             if not os.path.exists(os.path.join(output_folder, prj_name)):
                 os.makedirs(os.path.join(output_folder, prj_name))
-            segment.export(os.path.join(output_folder, prj_name, filename), format="wav", parameters=["-sample_fmt", "s16"])
+            # segment.export(os.path.join(output_folder, prj_name, filename), format="wav", parameters=["-sample_fmt", "s16"])
+            q.put((segment, (os.path.join(output_folder, prj_name, filename), "wav", ["-sample_fmt", "s16"])))
 
+    CPUS = os.cpu_count() or 1
+    for _ in range(CPUS):
+        t = Thread(target=worker_thread, args=(q,))
+        t.start()
+    
     if not use_subtitle_as_name:
         with open(os.path.join(output_folder, prj_name, "mapping.list"), "a", encoding="utf-8") as f:
             for line in mapping:
